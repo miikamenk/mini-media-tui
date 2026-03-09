@@ -1,0 +1,13 @@
+[package]
+name = "minimedia"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+ratatui = "0.30"
+ratatui-image = { version = "10", default-features = false, features = ["crossterm", "image-defaults"] }
+crossterm = "0.29"
+mpris = "2"
+anyhow = "1"
+ureq = { version = "2", features = ["tls"] }
+image = "0.25"
