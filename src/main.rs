@@ -6,20 +6,23 @@ use std::{
 
 use anyhow::Result;
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind},
+    event::{
+        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, MouseButton,
+        MouseEventKind,
+    },
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
-use mpris::{PlayerFinder, PlaybackStatus, Player};
+use mpris::{PlaybackStatus, Player, PlayerFinder};
 use ratatui::{
+    Frame, Terminal,
     backend::CrosstermBackend,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph, Wrap, Clear, ListItem, List, ListState},
-    Frame, Terminal,
+    widgets::{Block, Borders, Clear, Gauge, List, ListItem, ListState, Paragraph, Wrap},
 };
-use ratatui_image::{picker::Picker, protocol::StatefulProtocol, Resize, StatefulImage};
+use ratatui_image::{Resize, StatefulImage, picker::Picker, protocol::StatefulProtocol};
 
 const MAX_IMAGE_BYTES: u64 = 1_500_000;
 
@@ -71,7 +74,8 @@ impl MediaSource {
     }
 
     fn find_best_player(&self, finder: &PlayerFinder) -> Option<Player> {
-        finder.find_all()
+        finder
+            .find_all()
             .unwrap_or_default()
             .into_iter()
             .filter(|p| {
@@ -80,12 +84,11 @@ impl MediaSource {
                     .contains(&self.player_id.to_lowercase())
             })
             .max_by_key(|p| {
-                let is_playing = p.get_playback_status()
+                let is_playing = p
+                    .get_playback_status()
                     .map(|s| s == PlaybackStatus::Playing)
                     .unwrap_or(false);
-                let position = p.get_position()
-                    .map(|d| d.as_millis())
-                    .unwrap_or(0);
+                let position = p.get_position().map(|d| d.as_millis()).unwrap_or(0);
                 (is_playing, position)
             })
     }
@@ -144,7 +147,6 @@ impl MediaSource {
             }
         }
 
-
         self.media = media;
     }
 
@@ -157,6 +159,15 @@ impl MediaSource {
                 let new_volume = (current + delta as f64 / 100.0).clamp(0.0, 1.0);
                 let _ = player.set_volume(new_volume);
             }
+        }
+    }
+
+    fn set_volume(&self, finder: &PlayerFinder, volume: f64) {
+        if self.player_id == "empty" {
+            return;
+        }
+        if let Some(player) = self.find_best_player(finder) {
+            let _ = player.set_volume(volume);
         }
     }
 
@@ -195,6 +206,22 @@ impl MediaSource {
             player.seek(delta);
         }
     }
+
+    fn seek_to_percent(&self, finder: &PlayerFinder, percent: f64) {
+        if self.player_id == "empty" {
+            return;
+        }
+        if let (Some(max_dur), Some(player)) = (self.media.max_dur, self.find_best_player(finder)) {
+            if max_dur > 0 {
+                let target_secs = (max_dur as f64 * percent / 100.0) as i64;
+                if let Ok(current_pos) = player.get_position() {
+                    let current_secs = current_pos.as_secs() as i64;
+                    let delta = (target_secs - current_secs) * 1_000_000;
+                    player.seek(delta);
+                }
+            }
+        }
+    }
 }
 
 struct App {
@@ -205,6 +232,17 @@ struct App {
     picker: Picker,
     selected_media: String,
     overlay: Overlay,
+    card_regions: Vec<CardRegions>,
+}
+
+#[derive(Clone)]
+struct CardRegions {
+    card_area: Rect,
+    play_pause: Rect,
+    prev: Rect,
+    next: Rect,
+    progress_bar: Rect,
+    vol_bar: Rect,
 }
 
 impl App {
@@ -221,6 +259,17 @@ impl App {
             picker,
             selected_media: "".to_string(),
             overlay: Overlay::None,
+            card_regions: vec![
+                CardRegions {
+                    card_area: Rect::default(),
+                    play_pause: Rect::default(),
+                    prev: Rect::default(),
+                    next: Rect::default(),
+                    progress_bar: Rect::default(),
+                    vol_bar: Rect::default(),
+                };
+                2
+            ],
         };
         app.refresh_from_mpris();
         app
@@ -242,7 +291,8 @@ impl App {
 
     fn refresh_from_mpris(&mut self) {
         if let Ok(finder) = PlayerFinder::new() {
-            self.available_sources = finder.find_all()
+            self.available_sources = finder
+                .find_all()
                 .unwrap_or_default()
                 .iter()
                 .map(|p| p.bus_name().to_string())
@@ -267,7 +317,8 @@ impl App {
     }
 
     fn toggle_selected(&mut self) {
-        let current_idx = self.sources
+        let current_idx = self
+            .sources
             .iter()
             .position(|s| s.player_id == self.selected_media);
 
@@ -276,19 +327,73 @@ impl App {
                 let next_idx = (idx + 1) % self.sources.len();
                 self.sources[next_idx].player_id.clone()
             }
-            None => self.sources.first()
+            None => self
+                .sources
+                .first()
                 .map(|s| s.player_id.clone())
                 .unwrap_or_default(),
         };
     }
 
     fn selected_source(&self) -> Option<&MediaSource> {
-        self.sources.iter().find(|s| s.player_id == self.selected_media)
+        self.sources
+            .iter()
+            .find(|s| s.player_id == self.selected_media)
     }
 
     fn selected_source_mut(&mut self) -> Option<&mut MediaSource> {
-        self.sources.iter_mut().find(|s| s.player_id == self.selected_media)
+        self.sources
+            .iter_mut()
+            .find(|s| s.player_id == self.selected_media)
     }
+
+    fn handle_click(&mut self, finder: &PlayerFinder, pos: Rect) {
+        for (idx, regions) in self.card_regions.iter().enumerate() {
+            if pos_in_rect(pos, regions.card_area) {
+                if pos_in_rect(pos, regions.play_pause) {
+                    if let Some(source) = self.sources.get_mut(idx) {
+                        source.play_pause(finder);
+                    }
+                } else if pos_in_rect(pos, regions.prev) {
+                    if let Some(source) = self.sources.get_mut(idx) {
+                        source.previous(finder);
+                    }
+                } else if pos_in_rect(pos, regions.next) {
+                    if let Some(source) = self.sources.get_mut(idx) {
+                        source.next(finder);
+                    }
+                } else if pos_in_rect(pos, regions.progress_bar) {
+                    if let Some(source) = self.sources.get_mut(idx) {
+                        let bar_width = regions.progress_bar.width.saturating_sub(2);
+                        if bar_width > 0 {
+                            let relative_x = pos.x.saturating_sub(regions.progress_bar.x + 1);
+                            let percent = (relative_x as f64 / bar_width as f64) * 100.0;
+                            source.seek_to_percent(finder, percent.clamp(0.0, 100.0));
+                        }
+                    }
+                } else if pos_in_rect(pos, regions.vol_bar) {
+                    if let Some(source) = self.sources.get_mut(idx) {
+                        let bar_width = regions.vol_bar.width;
+                        if bar_width > 0 {
+                            let relative_x = pos.x.saturating_sub(regions.vol_bar.x);
+                            let percent = (relative_x as f64 / bar_width as f64);
+                            source.set_volume(finder, percent.clamp(0.0, 1.0));
+                        }
+                    }
+                } else {
+                    self.selected_media = self.sources[idx].player_id.clone();
+                }
+                return;
+            }
+        }
+    }
+}
+
+fn pos_in_rect(pos: Rect, rect: Rect) -> bool {
+    pos.x >= rect.x
+        && pos.x < rect.x + rect.width
+        && pos.y >= rect.y
+        && pos.y < rect.y + rect.height
 }
 
 fn load_thumbnail_from_bytes(picker: &Picker, bytes: &[u8]) -> Option<StatefulProtocol> {
@@ -311,26 +416,19 @@ fn load_thumbnail(picker: &Picker, url: &str) -> Option<StatefulProtocol> {
 }
 
 fn ui(f: &mut Frame<'_>, app: &mut App) {
-    let main_chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Percentage(95), Constraint::Percentage(5)])
-        .split(f.area());
-
     let top_chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-        .split(main_chunks[0]);
+        .split(f.area());
 
     for (idx, source) in app.sources.iter_mut().enumerate() {
         let is_selected = source.player_id == app.selected_media;
         if let Some(area) = top_chunks.get(idx) {
-            render_media_card(f, source, *area, is_selected);
+            let regions = &mut app.card_regions[idx];
+            regions.card_area = *area;
+            render_media_card(f, source, *area, is_selected, regions);
         }
     }
-
-    let sys_block = Block::default().title("system_info").borders(Borders::ALL);
-    let sys_text = Paragraph::new("press q to quit").block(sys_block);
-    f.render_widget(sys_text, main_chunks[1]);
 
     match &app.overlay {
         Overlay::Help => render_help_overlay(f),
@@ -347,20 +445,48 @@ fn render_help_overlay(f: &mut Frame<'_>) {
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Yellow));
     let text = vec![
-        Line::from(vec![Span::styled("h / l", Style::default().fg(Color::Green)), Span::raw("   toggle player")]),
-        Line::from(vec![Span::styled("k / j", Style::default().fg(Color::Green)), Span::raw("   volume up / down")]),
-        Line::from(vec![Span::styled("␣",     Style::default().fg(Color::Green)), Span::raw("       play/pause")]),
-        Line::from(vec![Span::styled("p",     Style::default().fg(Color::Green)), Span::raw("       previous")]),
-        Line::from(vec![Span::styled("n",     Style::default().fg(Color::Green)), Span::raw("       next")]),
-        Line::from(vec![Span::styled("←",     Style::default().fg(Color::Green)), Span::raw("       seek backwards 5s")]),
-        Line::from(vec![Span::styled("→",     Style::default().fg(Color::Green)), Span::raw("       seek forwards 5s")]),
-        Line::from(vec![Span::styled("s",     Style::default().fg(Color::Green)), Span::raw("       settings")]),
-        Line::from(vec![Span::styled("?",     Style::default().fg(Color::Green)), Span::raw("       this help")]),
-        Line::from(vec![Span::styled("q",     Style::default().fg(Color::Green)), Span::raw("       quit")]),
+        Line::from(vec![
+            Span::styled("h / l", Style::default().fg(Color::Green)),
+            Span::raw("   toggle player"),
+        ]),
+        Line::from(vec![
+            Span::styled("k / j", Style::default().fg(Color::Green)),
+            Span::raw("   volume up / down"),
+        ]),
+        Line::from(vec![
+            Span::styled("␣", Style::default().fg(Color::Green)),
+            Span::raw("       play/pause"),
+        ]),
+        Line::from(vec![
+            Span::styled("p", Style::default().fg(Color::Green)),
+            Span::raw("       previous"),
+        ]),
+        Line::from(vec![
+            Span::styled("n", Style::default().fg(Color::Green)),
+            Span::raw("       next"),
+        ]),
+        Line::from(vec![
+            Span::styled("←", Style::default().fg(Color::Green)),
+            Span::raw("       seek backwards 5s"),
+        ]),
+        Line::from(vec![
+            Span::styled("→", Style::default().fg(Color::Green)),
+            Span::raw("       seek forwards 5s"),
+        ]),
+        Line::from(vec![
+            Span::styled("s", Style::default().fg(Color::Green)),
+            Span::raw("       settings"),
+        ]),
+        Line::from(vec![
+            Span::styled("?", Style::default().fg(Color::Green)),
+            Span::raw("       this help"),
+        ]),
+        Line::from(vec![
+            Span::styled("q", Style::default().fg(Color::Green)),
+            Span::raw("       quit"),
+        ]),
     ];
-    let para = Paragraph::new(text)
-        .block(block)
-        .alignment(Alignment::Left);
+    let para = Paragraph::new(text).block(block).alignment(Alignment::Left);
     f.render_widget(para, area);
 }
 
@@ -375,45 +501,52 @@ fn render_settings_overlay(f: &mut Frame<'_>, app: &App, slot: usize, cursor: us
     let inner = outer.inner(area);
     f.render_widget(outer, area);
 
-    let halves = Layout::horizontal([
-        Constraint::Percentage(40),
-        Constraint::Percentage(60),
-    ]).split(inner);
+    let halves =
+        Layout::horizontal([Constraint::Percentage(40), Constraint::Percentage(60)]).split(inner);
 
     // Left: slots
-    let slot_items: Vec<ListItem> = app.sources.iter().enumerate().map(|(i, s)| {
-        let active = i == slot;
-        let style = if active {
-            Style::default().fg(Color::Yellow)
-        } else {
-            Style::default()
-        };
-        ListItem::new(Line::from(vec![
-            Span::styled(if active { "▶ " } else { "  " }, style),
-            Span::styled(format!("{}: {}", s.block_id, s.player_id), style),
-        ]))
-    }).collect();
+    let slot_items: Vec<ListItem> = app
+        .sources
+        .iter()
+        .enumerate()
+        .map(|(i, s)| {
+            let active = i == slot;
+            let style = if active {
+                Style::default().fg(Color::Yellow)
+            } else {
+                Style::default()
+            };
+            ListItem::new(Line::from(vec![
+                Span::styled(if active { "▶ " } else { "  " }, style),
+                Span::styled(format!("{}: {}", s.block_id, s.player_id), style),
+            ]))
+        })
+        .collect();
 
-    let slot_list = List::new(slot_items)
-        .block(Block::default().title(" Slots ").borders(Borders::ALL));
+    let slot_list =
+        List::new(slot_items).block(Block::default().title(" Slots ").borders(Borders::ALL));
     let mut slot_state = ListState::default();
     slot_state.select(Some(slot));
     f.render_stateful_widget(slot_list, halves[0], &mut slot_state);
 
-    let player_items: Vec<ListItem> = app.available_sources.iter().map(|p| {
-        let display = p.trim_start_matches("org.mpris.MediaPlayer2.");
-        let display = display.split('.').next().unwrap_or(display);
-        let is_current = app.sources[slot].player_id == display;
-        let style = if is_current {
-            Style::default().fg(Color::Green)
-        } else {
-            Style::default()
-        };
-        ListItem::new(Line::from(vec![
-            Span::styled(if is_current { "✓ " } else { "  " }, style),
-            Span::styled(display.to_string(), style),
-        ]))
-    }).collect();
+    let player_items: Vec<ListItem> = app
+        .available_sources
+        .iter()
+        .map(|p| {
+            let display = p.trim_start_matches("org.mpris.MediaPlayer2.");
+            let display = display.split('.').next().unwrap_or(display);
+            let is_current = app.sources[slot].player_id == display;
+            let style = if is_current {
+                Style::default().fg(Color::Green)
+            } else {
+                Style::default()
+            };
+            ListItem::new(Line::from(vec![
+                Span::styled(if is_current { "✓ " } else { "  " }, style),
+                Span::styled(display.to_string(), style),
+            ]))
+        })
+        .collect();
 
     let player_list = List::new(player_items)
         .block(Block::default().title(" Available ").borders(Borders::ALL))
@@ -428,15 +561,23 @@ fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
         Constraint::Percentage((100 - percent_y) / 2),
         Constraint::Percentage(percent_y),
         Constraint::Percentage((100 - percent_y) / 2),
-    ]).split(area);
+    ])
+    .split(area);
     Layout::horizontal([
         Constraint::Percentage((100 - percent_x) / 2),
         Constraint::Percentage(percent_x),
         Constraint::Percentage((100 - percent_x) / 2),
-    ]).split(vertical[1])[1]
+    ])
+    .split(vertical[1])[1]
 }
 
-fn render_media_card(f: &mut Frame<'_>, source: &mut MediaSource, area: Rect, is_selected: bool) {
+fn render_media_card(
+    f: &mut Frame<'_>,
+    source: &mut MediaSource,
+    area: Rect,
+    is_selected: bool,
+    regions: &mut CardRegions,
+) {
     let border_style = if is_selected {
         Style::default().fg(Color::Green)
     } else {
@@ -452,15 +593,21 @@ fn render_media_card(f: &mut Frame<'_>, source: &mut MediaSource, area: Rect, is
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
+        .constraints([
+            Constraint::Percentage(60),
+            Constraint::Percentage(10),
+            Constraint::Percentage(30),
+        ])
         .split(inner);
+
+    render_artwork(f, &mut source.media, chunks[0]);
 
     let details = Paragraph::new(media_lines(source))
         .style(Style::default())
         .wrap(Wrap { trim: true });
     f.render_widget(details, chunks[1]);
 
-    render_artwork(f, &mut source.media, chunks[0]);
+    render_controls(f, source, chunks[2], regions);
 }
 
 fn render_artwork(f: &mut Frame<'_>, media: &mut Media, area: Rect) {
@@ -472,13 +619,15 @@ fn render_artwork(f: &mut Frame<'_>, media: &mut Media, area: Rect) {
             Constraint::Fill(1),
             Constraint::Length(area.height * 2),
             Constraint::Fill(1),
-        ]).split(area);
+        ])
+        .split(area);
 
         let v_chunks = Layout::vertical([
             Constraint::Fill(1),
             Constraint::Length(area.height * 2),
             Constraint::Fill(1),
-        ]).split(h_chunks[1]);
+        ])
+        .split(h_chunks[1]);
 
         let image = StatefulImage::default().resize(Resize::Fit(None));
         f.render_stateful_widget(image, v_chunks[1], state);
@@ -490,6 +639,70 @@ fn render_artwork(f: &mut Frame<'_>, media: &mut Media, area: Rect) {
     }
 }
 
+fn render_controls(f: &mut Frame<'_>, source: &MediaSource, area: Rect, regions: &mut CardRegions) {
+    let chunks =
+        Layout::vertical([Constraint::Percentage(70), Constraint::Percentage(30)]).split(area);
+    let seek_chunks = Layout::horizontal([Constraint::Percentage(70), Constraint::Percentage(30)])
+        .split(chunks[1]);
+    let progress_chunk = seek_chunks[0];
+    let controls_chunk = chunks[0];
+    let volume_chunk = seek_chunks[1];
+
+    // Progress bar
+    let progress_gauge = Gauge::default()
+        .gauge_style(Style::default().fg(Color::Blue))
+        .label(format!(
+            "{} / {}",
+            format_duration(source.media.dur),
+            format_duration(source.media.max_dur)
+        ));
+    let ratio = match (source.media.dur, source.media.max_dur) {
+        (Some(cur), Some(max)) if max > 0 => (cur as f64 / max as f64).min(1.0),
+        _ => 0.0,
+    };
+    f.render_widget(progress_gauge.ratio(ratio), progress_chunk);
+    regions.progress_bar = progress_chunk;
+
+    let vol_ratio = source
+        .media
+        .volume_pct
+        .map(|v| v as f64 / 100.0)
+        .unwrap_or(0.0);
+    let vol_label = format!("Vol {}%", source.media.volume_pct.unwrap_or(0));
+    let vol_gauge = Gauge::default()
+        .gauge_style(Style::default().fg(Color::Magenta))
+        .label(vol_label)
+        .ratio(vol_ratio);
+    f.render_widget(vol_gauge, volume_chunk);
+    regions.vol_bar = volume_chunk;
+
+    let btn_layout =
+        Layout::horizontal([Constraint::Min(6), Constraint::Min(8), Constraint::Min(6)])
+            .flex(ratatui::layout::Flex::SpaceAround)
+            .split(controls_chunk);
+
+    let btn_style = Style::default()
+        .fg(Color::White)
+        .add_modifier(Modifier::BOLD);
+    let sel_style = Style::default()
+        .fg(Color::Yellow)
+        .add_modifier(Modifier::BOLD);
+
+    fn make_btn(label: &str, style: Style) -> Paragraph<'_> {
+        Paragraph::new(label)
+            .alignment(Alignment::Center)
+            .block(Block::default().borders(Borders::ALL))
+            .style(style)
+    }
+
+    f.render_widget(make_btn("|<", btn_style), btn_layout[0]);
+    regions.prev = btn_layout[0];
+    f.render_widget(make_btn("⏸", sel_style), btn_layout[1]);
+    regions.play_pause = btn_layout[1];
+    f.render_widget(make_btn(">|", btn_style), btn_layout[2]);
+    regions.next = btn_layout[2];
+}
+
 fn media_lines(source: &MediaSource) -> Vec<Line<'static>> {
     vec![
         //Line::from(Span::styled(
@@ -499,15 +712,15 @@ fn media_lines(source: &MediaSource) -> Vec<Line<'static>> {
         //Line::from(format!("Track ID: {}", source.media.id)),
         Line::from(format!("Title: {}", source.media.title)),
         Line::from(format!("Author: {}", source.media.author)),
-        Line::from(format!(
-            "Progress: {} / {}",
-            format_duration(source.media.dur),
-            format_duration(source.media.max_dur)
-        )),
-        Line::from(format!(
-            "Volume: {}",
-            format_volume(source.media.volume_pct)
-        )),
+        //line::from(format!(
+        //    "Progress: {} / {}",
+        //    format_duration(source.media.dur),
+        //    format_duration(source.media.max_dur)
+        //)),
+        //Line::from(format!(
+        //    "Volume: {}",
+        //    format_volume(source.media.volume_pct)
+        //)),
         //Line::from(format!(
         //    "Artwork: {}",
         //    source.media.art_url.as_deref().unwrap_or("(none)")
@@ -546,84 +759,115 @@ fn main() -> Result<()> {
         app.maybe_refresh();
         terminal.draw(|f| ui(f, &mut app))?;
         if event::poll(Duration::from_millis(100))? {
-            if let Event::Key(key) = event::read()? {
-                if key.kind != KeyEventKind::Press {
-                    continue;
-                }
-                match &app.overlay {
-                    Overlay::Settings { .. } => match key.code {
-                        KeyCode::Tab => {
-                            if let Overlay::Settings { slot, cursor } = &mut app.overlay {
-                                *slot = (*slot + 1) % app.sources.len();
-                                *cursor = 0;
-                            }
-                        }
-                        KeyCode::Char('j') | KeyCode::Down => {
-                            if let Overlay::Settings { cursor, .. } = &mut app.overlay {
-                                *cursor = (*cursor + 1) % app.available_sources.len();
-                            }
-                        }
-                        KeyCode::Char('k') | KeyCode::Up => {
-                            if let Overlay::Settings { cursor, .. } = &mut app.overlay {
-                                *cursor = cursor.checked_sub(1).unwrap_or(app.available_sources.len() - 1);
-                            }
-                        }
-                        KeyCode::Enter => {
-                            if let Overlay::Settings { slot, cursor } = app.overlay {
-                                if let Some(player) = app.available_sources.get(cursor) {
-                                    let display = player.trim_start_matches("org.mpris.MediaPlayer2.").to_string();
-                                    app.sources[slot].player_id = display;
+            match event::read()? {
+                Event::Key(key) => {
+                    if key.kind != KeyEventKind::Press {
+                        continue;
+                    }
+                    match &app.overlay {
+                        Overlay::Settings { .. } => match key.code {
+                            KeyCode::Tab => {
+                                if let Overlay::Settings { slot, cursor } = &mut app.overlay {
+                                    *slot = (*slot + 1) % app.sources.len();
+                                    *cursor = 0;
                                 }
                             }
-                            app.overlay = Overlay::None;
-                        }
-                        KeyCode::Char('s') | KeyCode::Esc | KeyCode::Char('q') => app.overlay = Overlay::None,
-                        _ => {}
-                    },
-                    _ => match key.code {
-                        KeyCode::Char('q') | KeyCode::Esc => break,
-                        KeyCode::Char('?') => app.toggle_help(),
-                        KeyCode::Char('s') => app.toggle_settings(),
-                        KeyCode::Char('h') => app.toggle_selected(),
-                        KeyCode::Char('l') => app.toggle_selected(),
-                        KeyCode::Char('j') | KeyCode::Down => {
-                            if let (Some(source), Some(finder)) = (app.selected_source_mut(), finder.as_ref()) {
-                                source.adjust_volume(finder, -5);
+                            KeyCode::Char('j') | KeyCode::Down => {
+                                if let Overlay::Settings { cursor, .. } = &mut app.overlay {
+                                    *cursor = (*cursor + 1) % app.available_sources.len();
+                                }
                             }
-                        }
-                        KeyCode::Char('k') | KeyCode::Up => {
-                            if let (Some(source), Some(finder)) = (app.selected_source_mut(), finder.as_ref()) {
-                                source.adjust_volume(finder, 5);
+                            KeyCode::Char('k') | KeyCode::Up => {
+                                if let Overlay::Settings { cursor, .. } = &mut app.overlay {
+                                    *cursor = cursor
+                                        .checked_sub(1)
+                                        .unwrap_or(app.available_sources.len() - 1);
+                                }
                             }
-                        }
-                        KeyCode::Char(' ') => {
-                            if let (Some(source), Some(finder)) = (app.selected_source_mut(), finder.as_ref()) {
-                                source.play_pause(finder);
+                            KeyCode::Enter => {
+                                if let Overlay::Settings { slot, cursor } = app.overlay {
+                                    if let Some(player) = app.available_sources.get(cursor) {
+                                        let display = player
+                                            .trim_start_matches("org.mpris.MediaPlayer2.")
+                                            .to_string();
+                                        app.sources[slot].player_id = display;
+                                    }
+                                }
+                                app.overlay = Overlay::None;
                             }
-                        }
-                        KeyCode::Char('p') => {
-                            if let (Some(source), Some(finder)) = (app.selected_source_mut(), finder.as_ref()) {
-                                source.previous(finder);
+                            KeyCode::Char('s') | KeyCode::Esc | KeyCode::Char('q') => {
+                                app.overlay = Overlay::None
                             }
-                        }
-                        KeyCode::Char('n') => {
-                            if let (Some(source), Some(finder)) = (app.selected_source_mut(), finder.as_ref()) {
-                                source.next(finder);
+                            _ => {}
+                        },
+                        _ => match key.code {
+                            KeyCode::Char('q') | KeyCode::Esc => break,
+                            KeyCode::Char('?') => app.toggle_help(),
+                            KeyCode::Char('s') => app.toggle_settings(),
+                            KeyCode::Char('h') => app.toggle_selected(),
+                            KeyCode::Char('l') => app.toggle_selected(),
+                            KeyCode::Char('j') | KeyCode::Down => {
+                                if let (Some(source), Some(finder)) =
+                                    (app.selected_source_mut(), finder.as_ref())
+                                {
+                                    source.adjust_volume(finder, -5);
+                                }
                             }
-                        }
-                        KeyCode::Left => {
-                            if let (Some(source), Some(finder)) = (app.selected_source_mut(), finder.as_ref()) {
-                                source.seek(finder, -5 * 1000000);
+                            KeyCode::Char('k') | KeyCode::Up => {
+                                if let (Some(source), Some(finder)) =
+                                    (app.selected_source_mut(), finder.as_ref())
+                                {
+                                    source.adjust_volume(finder, 5);
+                                }
                             }
-                        }
-                        KeyCode::Right => {
-                            if let (Some(source), Some(finder)) = (app.selected_source_mut(), finder.as_ref()) {
-                                source.seek(finder, 5 * 1000000);
+                            KeyCode::Char(' ') => {
+                                if let (Some(source), Some(finder)) =
+                                    (app.selected_source_mut(), finder.as_ref())
+                                {
+                                    source.play_pause(finder);
+                                }
                             }
-                        }
-                        _ => {}
+                            KeyCode::Char('p') => {
+                                if let (Some(source), Some(finder)) =
+                                    (app.selected_source_mut(), finder.as_ref())
+                                {
+                                    source.previous(finder);
+                                }
+                            }
+                            KeyCode::Char('n') => {
+                                if let (Some(source), Some(finder)) =
+                                    (app.selected_source_mut(), finder.as_ref())
+                                {
+                                    source.next(finder);
+                                }
+                            }
+                            KeyCode::Left => {
+                                if let (Some(source), Some(finder)) =
+                                    (app.selected_source_mut(), finder.as_ref())
+                                {
+                                    source.seek(finder, -5 * 1000000);
+                                }
+                            }
+                            KeyCode::Right => {
+                                if let (Some(source), Some(finder)) =
+                                    (app.selected_source_mut(), finder.as_ref())
+                                {
+                                    source.seek(finder, 5 * 1000000);
+                                }
+                            }
+                            _ => {}
+                        },
                     }
                 }
+                Event::Mouse(mouse) => {
+                    if mouse.kind == MouseEventKind::Down(MouseButton::Left) {
+                        let click_rect = Rect::new(mouse.column, mouse.row, 1, 1);
+                        if let Some(finder) = finder.as_ref() {
+                            app.handle_click(finder, click_rect);
+                        }
+                    }
+                }
+                _ => {}
             }
         }
     }
