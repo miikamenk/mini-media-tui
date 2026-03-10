@@ -118,7 +118,47 @@ impl MediaSource {
             }
         }
 
+
         self.media = media;
+    }
+
+    fn adjust_volume(&self, finder: &PlayerFinder, delta: i8) {
+        if self.player_id == "empty" {
+            return;
+        }
+        if let Ok(player) = finder.find_by_name(&self.player_id) {
+            if let Ok(current) = player.get_volume() {
+                let new_volume = (current + delta as f64 / 100.0).clamp(0.0, 1.0);
+                let _ = player.set_volume(new_volume);
+            }
+        }
+    }
+
+    fn play_pause(&self, finder: &PlayerFinder) {
+        if self.player_id == "empty" {
+            return;
+        }
+        if let Ok(player) = finder.find_by_name(&self.player_id) {
+            player.play_pause();
+        }
+    }
+
+    fn previous(&self, finder: &PlayerFinder) {
+        if self.player_id == "empty" {
+            return;
+        }
+        if let Ok(player) = finder.find_by_name(&self.player_id) {
+            player.previous();
+        }
+    }
+
+    fn next(&self, finder: &PlayerFinder) {
+        if self.player_id == "empty" {
+            return;
+        }
+        if let Ok(player) = finder.find_by_name(&self.player_id) {
+            player.next();
+        }
     }
 }
 
@@ -127,6 +167,7 @@ struct App {
     refresh_interval: Duration,
     last_refresh: Instant,
     picker: Picker,
+    selected_media: String,
 }
 
 impl App {
@@ -135,11 +176,12 @@ impl App {
         let mut app = Self {
             sources: vec![
                 MediaSource::new("media_1", "spotify"),
-                MediaSource::new("media_2", "empty"),
+                MediaSource::new("media_2", "firefox"),
             ],
             refresh_interval: Duration::from_secs(1),
             last_refresh: Instant::now(),
             picker,
+            selected_media: "spotify".to_string(),
         };
         app.refresh_from_mpris();
         app
@@ -163,6 +205,30 @@ impl App {
         if self.last_refresh.elapsed() >= self.refresh_interval {
             self.refresh_from_mpris();
         }
+    }
+
+    fn toggle_selected(&mut self) {
+        let current_idx = self.sources
+            .iter()
+            .position(|s| s.player_id == self.selected_media);
+
+        self.selected_media = match current_idx {
+            Some(idx) => {
+                let next_idx = (idx + 1) % self.sources.len();
+                self.sources[next_idx].player_id.clone()
+            }
+            None => self.sources.first()
+                .map(|s| s.player_id.clone())
+                .unwrap_or_default(),
+        };
+    }
+
+    fn selected_source(&self) -> Option<&MediaSource> {
+        self.sources.iter().find(|s| s.player_id == self.selected_media)
+    }
+
+    fn selected_source_mut(&mut self) -> Option<&mut MediaSource> {
+        self.sources.iter_mut().find(|s| s.player_id == self.selected_media)
     }
 }
 
@@ -297,14 +363,46 @@ fn main() -> Result<()> {
 
     let mut app = App::new();
 
+    let finder = PlayerFinder::new().ok();
+
     loop {
         app.maybe_refresh();
         terminal.draw(|f| ui(f, &mut app))?;
-
         if event::poll(Duration::from_millis(100))? {
             if let Event::Key(key) = event::read()? {
-                if key.kind == KeyEventKind::Press && key.code == KeyCode::Char('q') {
-                    break;
+                if key.kind != KeyEventKind::Press {
+                    continue;
+                }
+                match key.code {
+                    KeyCode::Char('q') => break,
+                    KeyCode::Char('h') => app.toggle_selected(),
+                    KeyCode::Char('l') => app.toggle_selected(),
+                    KeyCode::Char('j') | KeyCode::Down => {
+                        if let (Some(source), Some(finder)) = (app.selected_source_mut(), finder.as_ref()) {
+                            source.adjust_volume(finder, -5);
+                        }
+                    }
+                    KeyCode::Char('k') | KeyCode::Up => {
+                        if let (Some(source), Some(finder)) = (app.selected_source_mut(), finder.as_ref()) {
+                            source.adjust_volume(finder, 5);
+                        }
+                    }
+                    KeyCode::Char(' ') => {
+                        if let (Some(source), Some(finder)) = (app.selected_source_mut(), finder.as_ref()) {
+                            source.play_pause(finder);
+                        }
+                    }
+                    KeyCode::Char('p') => {
+                        if let (Some(source), Some(finder)) = (app.selected_source_mut(), finder.as_ref()) {
+                            source.previous(finder);
+                        }
+                    }
+                    KeyCode::Char('n') => {
+                        if let (Some(source), Some(finder)) = (app.selected_source_mut(), finder.as_ref()) {
+                            source.next(finder);
+                        }
+                    }
+                    _ => {}
                 }
             }
         }
