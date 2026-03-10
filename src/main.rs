@@ -603,8 +603,8 @@ fn render_media_card(
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Percentage(60),
-            Constraint::Percentage(10),
+            Constraint::Percentage(55),
+            Constraint::Percentage(15),
             Constraint::Percentage(30),
         ])
         .split(inner);
@@ -726,8 +726,8 @@ fn media_lines(source: &MediaSource) -> Vec<Line<'static>> {
         //    Style::default().add_modifier(Modifier::BOLD),
         //)),
         //Line::from(format!("Track ID: {}", source.media.id)),
-        Line::from(format!("Title: {}", source.media.title)),
-        Line::from(format!("Author: {}", source.media.author)),
+        Line::from(source.media.title.clone()),
+        Line::from(source.media.author.clone()),
         //line::from(format!(
         //    "Progress: {} / {}",
         //    format_duration(source.media.dur),
