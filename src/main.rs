@@ -16,12 +16,18 @@ use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph, Wrap},
+    widgets::{Block, Borders, Paragraph, Wrap, Clear, ListItem, List, ListState},
     Frame, Terminal,
 };
 use ratatui_image::{picker::Picker, protocol::StatefulProtocol, Resize, StatefulImage};
 
 const MAX_IMAGE_BYTES: u64 = 1_500_000;
+
+enum Overlay {
+    None,
+    Help,
+    Settings { slot: usize, cursor: usize },
+}
 
 struct Media {
     id: String,
@@ -193,10 +199,12 @@ impl MediaSource {
 
 struct App {
     sources: Vec<MediaSource>,
+    available_sources: Vec<String>,
     refresh_interval: Duration,
     last_refresh: Instant,
     picker: Picker,
     selected_media: String,
+    overlay: Overlay,
 }
 
 impl App {
@@ -207,22 +215,44 @@ impl App {
                 MediaSource::new("media_1", "spotify"),
                 MediaSource::new("media_2", "firefox"),
             ],
+            available_sources: vec![],
             refresh_interval: Duration::from_secs(1),
             last_refresh: Instant::now(),
             picker,
-            selected_media: "spotify".to_string(),
+            selected_media: "".to_string(),
+            overlay: Overlay::None,
         };
         app.refresh_from_mpris();
         app
     }
 
+    fn toggle_help(&mut self) {
+        self.overlay = match self.overlay {
+            Overlay::None => Overlay::Help,
+            _ => Overlay::None,
+        };
+    }
+
+    fn toggle_settings(&mut self) {
+        self.overlay = match self.overlay {
+            Overlay::None => Overlay::Settings { slot: 0, cursor: 0 },
+            _ => Overlay::None,
+        };
+    }
+
     fn refresh_from_mpris(&mut self) {
         if let Ok(finder) = PlayerFinder::new() {
+            self.available_sources = finder.find_all()
+                .unwrap_or_default()
+                .iter()
+                .map(|p| p.bus_name().to_string())
+                .collect();
             let picker = &self.picker;
             for source in &mut self.sources {
                 source.refresh(&finder, picker);
             }
         } else {
+            self.available_sources.clear();
             for source in &mut self.sources {
                 source.media = Media::placeholder(&source.player_id);
             }
@@ -292,20 +322,126 @@ fn ui(f: &mut Frame<'_>, app: &mut App) {
         .split(main_chunks[0]);
 
     for (idx, source) in app.sources.iter_mut().enumerate() {
+        let is_selected = source.player_id == app.selected_media;
         if let Some(area) = top_chunks.get(idx) {
-            render_media_card(f, source, *area);
+            render_media_card(f, source, *area, is_selected);
         }
     }
 
     let sys_block = Block::default().title("system_info").borders(Borders::ALL);
     let sys_text = Paragraph::new("press q to quit").block(sys_block);
     f.render_widget(sys_text, main_chunks[1]);
+
+    match &app.overlay {
+        Overlay::Help => render_help_overlay(f),
+        Overlay::Settings { slot, cursor } => render_settings_overlay(f, app, *slot, *cursor),
+        Overlay::None => {}
+    }
 }
 
-fn render_media_card(f: &mut Frame<'_>, source: &mut MediaSource, area: Rect) {
+fn render_help_overlay(f: &mut Frame<'_>) {
+    let area = centered_rect(50, 60, f.area());
+    f.render_widget(Clear, area);
+    let block = Block::default()
+        .title(" Keybindings ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Yellow));
+    let text = vec![
+        Line::from(vec![Span::styled("h / l", Style::default().fg(Color::Green)), Span::raw("   toggle player")]),
+        Line::from(vec![Span::styled("k / j", Style::default().fg(Color::Green)), Span::raw("   volume up / down")]),
+        Line::from(vec![Span::styled("s",     Style::default().fg(Color::Green)), Span::raw("       settings")]),
+        Line::from(vec![Span::styled("?",     Style::default().fg(Color::Green)), Span::raw("       this help")]),
+        Line::from(vec![Span::styled("q",     Style::default().fg(Color::Green)), Span::raw("       quit")]),
+    ];
+    let para = Paragraph::new(text)
+        .block(block)
+        .alignment(Alignment::Left);
+    f.render_widget(para, area);
+}
+
+fn render_settings_overlay(f: &mut Frame<'_>, app: &App, slot: usize, cursor: usize) {
+    let area = centered_rect(60, 70, f.area());
+    f.render_widget(Clear, area);
+
+    let outer = Block::default()
+        .title(" Reassign players ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Yellow));
+    let inner = outer.inner(area);
+    f.render_widget(outer, area);
+
+    let halves = Layout::horizontal([
+        Constraint::Percentage(40),
+        Constraint::Percentage(60),
+    ]).split(inner);
+
+    // Left: slots
+    let slot_items: Vec<ListItem> = app.sources.iter().enumerate().map(|(i, s)| {
+        let active = i == slot;
+        let style = if active {
+            Style::default().fg(Color::Yellow)
+        } else {
+            Style::default()
+        };
+        ListItem::new(Line::from(vec![
+            Span::styled(if active { "▶ " } else { "  " }, style),
+            Span::styled(format!("{}: {}", s.block_id, s.player_id), style),
+        ]))
+    }).collect();
+
+    let slot_list = List::new(slot_items)
+        .block(Block::default().title(" Slots ").borders(Borders::ALL));
+    let mut slot_state = ListState::default();
+    slot_state.select(Some(slot));
+    f.render_stateful_widget(slot_list, halves[0], &mut slot_state);
+
+    let player_items: Vec<ListItem> = app.available_sources.iter().map(|p| {
+        let display = p.trim_start_matches("org.mpris.MediaPlayer2.");
+        let display = display.split('.').next().unwrap_or(display);
+        let is_current = app.sources[slot].player_id == display;
+        let style = if is_current {
+            Style::default().fg(Color::Green)
+        } else {
+            Style::default()
+        };
+        ListItem::new(Line::from(vec![
+            Span::styled(if is_current { "✓ " } else { "  " }, style),
+            Span::styled(display.to_string(), style),
+        ]))
+    }).collect();
+
+    let player_list = List::new(player_items)
+        .block(Block::default().title(" Available ").borders(Borders::ALL))
+        .highlight_style(Style::default().fg(Color::Yellow));
+    let mut player_state = ListState::default();
+    player_state.select(Some(cursor));
+    f.render_stateful_widget(player_list, halves[1], &mut player_state);
+}
+
+fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
+    let vertical = Layout::vertical([
+        Constraint::Percentage((100 - percent_y) / 2),
+        Constraint::Percentage(percent_y),
+        Constraint::Percentage((100 - percent_y) / 2),
+    ]).split(area);
+    Layout::horizontal([
+        Constraint::Percentage((100 - percent_x) / 2),
+        Constraint::Percentage(percent_x),
+        Constraint::Percentage((100 - percent_x) / 2),
+    ]).split(vertical[1])[1]
+}
+
+fn render_media_card(f: &mut Frame<'_>, source: &mut MediaSource, area: Rect, is_selected: bool) {
+    let border_style = if is_selected {
+        Style::default().fg(Color::Green)
+    } else {
+        Style::default()
+    };
+
     let block = Block::default()
         .title(source.block_id.as_str())
-        .borders(Borders::ALL);
+        .borders(Borders::ALL)
+        .border_style(border_style);
     let inner = block.inner(area);
     f.render_widget(block, area);
 
@@ -327,8 +463,6 @@ fn render_artwork(f: &mut Frame<'_>, media: &mut Media, area: Rect) {
         return;
     }
     if let Some(state) = media.art_state.as_mut() {
-        let size = area.height.min(area.width);
-
         let h_chunks = Layout::horizontal([
             Constraint::Fill(1),
             Constraint::Length(area.height * 2),
@@ -411,46 +545,79 @@ fn main() -> Result<()> {
                 if key.kind != KeyEventKind::Press {
                     continue;
                 }
-                match key.code {
-                    KeyCode::Char('q') => break,
-                    KeyCode::Char('h') => app.toggle_selected(),
-                    KeyCode::Char('l') => app.toggle_selected(),
-                    KeyCode::Char('j') | KeyCode::Down => {
-                        if let (Some(source), Some(finder)) = (app.selected_source_mut(), finder.as_ref()) {
-                            source.adjust_volume(finder, -5);
+                match &app.overlay {
+                    Overlay::Settings { .. } => match key.code {
+                        KeyCode::Tab => {
+                            if let Overlay::Settings { slot, cursor } = &mut app.overlay {
+                                *slot = (*slot + 1) % app.sources.len();
+                                *cursor = 0;
+                            }
                         }
-                    }
-                    KeyCode::Char('k') | KeyCode::Up => {
-                        if let (Some(source), Some(finder)) = (app.selected_source_mut(), finder.as_ref()) {
-                            source.adjust_volume(finder, 5);
+                        KeyCode::Char('j') | KeyCode::Down => {
+                            if let Overlay::Settings { cursor, .. } = &mut app.overlay {
+                                *cursor = (*cursor + 1) % app.available_sources.len();
+                            }
                         }
-                    }
-                    KeyCode::Char(' ') => {
-                        if let (Some(source), Some(finder)) = (app.selected_source_mut(), finder.as_ref()) {
-                            source.play_pause(finder);
+                        KeyCode::Char('k') | KeyCode::Up => {
+                            if let Overlay::Settings { cursor, .. } = &mut app.overlay {
+                                *cursor = cursor.checked_sub(1).unwrap_or(app.available_sources.len() - 1);
+                            }
                         }
-                    }
-                    KeyCode::Char('p') => {
-                        if let (Some(source), Some(finder)) = (app.selected_source_mut(), finder.as_ref()) {
-                            source.previous(finder);
+                        KeyCode::Enter => {
+                            if let Overlay::Settings { slot, cursor } = app.overlay {
+                                if let Some(player) = app.available_sources.get(cursor) {
+                                    let display = player.trim_start_matches("org.mpris.MediaPlayer2.").to_string();
+                                    app.sources[slot].player_id = display;
+                                }
+                            }
+                            app.overlay = Overlay::None;
                         }
-                    }
-                    KeyCode::Char('n') => {
-                        if let (Some(source), Some(finder)) = (app.selected_source_mut(), finder.as_ref()) {
-                            source.next(finder);
+                        KeyCode::Char('s') | KeyCode::Esc | KeyCode::Char('q') => app.overlay = Overlay::None,
+                        _ => {}
+                    },
+                    _ => match key.code {
+                        KeyCode::Char('q') | KeyCode::Esc => break,
+                        KeyCode::Char('?') => app.toggle_help(),
+                        KeyCode::Char('s') => app.toggle_settings(),
+                        KeyCode::Char('h') => app.toggle_selected(),
+                        KeyCode::Char('l') => app.toggle_selected(),
+                        KeyCode::Char('j') | KeyCode::Down => {
+                            if let (Some(source), Some(finder)) = (app.selected_source_mut(), finder.as_ref()) {
+                                source.adjust_volume(finder, -5);
+                            }
                         }
-                    }
-                    KeyCode::Left => {
-                        if let (Some(source), Some(finder)) = (app.selected_source_mut(), finder.as_ref()) {
-                            source.seek(finder, -5 * 1000000);
+                        KeyCode::Char('k') | KeyCode::Up => {
+                            if let (Some(source), Some(finder)) = (app.selected_source_mut(), finder.as_ref()) {
+                                source.adjust_volume(finder, 5);
+                            }
                         }
-                    }
-                    KeyCode::Right => {
-                        if let (Some(source), Some(finder)) = (app.selected_source_mut(), finder.as_ref()) {
-                            source.seek(finder, 5 * 1000000);
+                        KeyCode::Char(' ') => {
+                            if let (Some(source), Some(finder)) = (app.selected_source_mut(), finder.as_ref()) {
+                                source.play_pause(finder);
+                            }
                         }
+                        KeyCode::Char('p') => {
+                            if let (Some(source), Some(finder)) = (app.selected_source_mut(), finder.as_ref()) {
+                                source.previous(finder);
+                            }
+                        }
+                        KeyCode::Char('n') => {
+                            if let (Some(source), Some(finder)) = (app.selected_source_mut(), finder.as_ref()) {
+                                source.next(finder);
+                            }
+                        }
+                        KeyCode::Left => {
+                            if let (Some(source), Some(finder)) = (app.selected_source_mut(), finder.as_ref()) {
+                                source.seek(finder, -5 * 1000000);
+                            }
+                        }
+                        KeyCode::Right => {
+                            if let (Some(source), Some(finder)) = (app.selected_source_mut(), finder.as_ref()) {
+                                source.seek(finder, 5 * 1000000);
+                            }
+                        }
+                        _ => {}
                     }
-                    _ => {}
                 }
             }
         }
