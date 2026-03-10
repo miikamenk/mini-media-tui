@@ -313,7 +313,7 @@ fn load_thumbnail(picker: &Picker, url: &str) -> Option<StatefulProtocol> {
 fn ui(f: &mut Frame<'_>, app: &mut App) {
     let main_chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Percentage(90), Constraint::Percentage(10)])
+        .constraints([Constraint::Percentage(95), Constraint::Percentage(5)])
         .split(f.area());
 
     let top_chunks = Layout::default()
@@ -349,6 +349,11 @@ fn render_help_overlay(f: &mut Frame<'_>) {
     let text = vec![
         Line::from(vec![Span::styled("h / l", Style::default().fg(Color::Green)), Span::raw("   toggle player")]),
         Line::from(vec![Span::styled("k / j", Style::default().fg(Color::Green)), Span::raw("   volume up / down")]),
+        Line::from(vec![Span::styled("␣",     Style::default().fg(Color::Green)), Span::raw("       play/pause")]),
+        Line::from(vec![Span::styled("p",     Style::default().fg(Color::Green)), Span::raw("       previous")]),
+        Line::from(vec![Span::styled("n",     Style::default().fg(Color::Green)), Span::raw("       next")]),
+        Line::from(vec![Span::styled("←",     Style::default().fg(Color::Green)), Span::raw("       seek backwards 5s")]),
+        Line::from(vec![Span::styled("→",     Style::default().fg(Color::Green)), Span::raw("       seek forwards 5s")]),
         Line::from(vec![Span::styled("s",     Style::default().fg(Color::Green)), Span::raw("       settings")]),
         Line::from(vec![Span::styled("?",     Style::default().fg(Color::Green)), Span::raw("       this help")]),
         Line::from(vec![Span::styled("q",     Style::default().fg(Color::Green)), Span::raw("       quit")]),
