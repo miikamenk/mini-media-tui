@@ -28,7 +28,7 @@ const MAX_IMAGE_BYTES: u64 = 1_500_000;
 
 enum Overlay {
     None,
-    Help,
+    Help { scroll: u16 },
     Settings { slot: usize, cursor: usize },
 }
 
@@ -283,7 +283,7 @@ impl App {
 
     fn toggle_help(&mut self) {
         self.overlay = match self.overlay {
-            Overlay::None => Overlay::Help,
+            Overlay::None => Overlay::Help { scroll: 0 },
             _ => Overlay::None,
         };
     }
@@ -437,17 +437,17 @@ fn ui(f: &mut Frame<'_>, app: &mut App) {
     }
 
     match &app.overlay {
-        Overlay::Help => render_help_overlay(f),
+        Overlay::Help { scroll } => render_help_overlay(f, *scroll),
         Overlay::Settings { slot, cursor } => render_settings_overlay(f, app, *slot, *cursor),
         Overlay::None => {}
     }
 }
 
-fn render_help_overlay(f: &mut Frame<'_>) {
+fn render_help_overlay(f: &mut Frame<'_>, scroll: u16) {
     let area = centered_rect(50, 60, f.area());
     f.render_widget(Clear, area);
     let block = Block::default()
-        .title(" Keybindings ")
+        .title(" Keybindings (j/k to scroll) ")
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Yellow));
     let text = vec![
@@ -456,8 +456,8 @@ fn render_help_overlay(f: &mut Frame<'_>) {
             Span::raw("   toggle player"),
         ]),
         Line::from(vec![
-            Span::styled("k / j", Style::default().fg(Color::Green)),
-            Span::raw("   volume up / down"),
+            Span::styled("j / k", Style::default().fg(Color::Green)),
+            Span::raw("   volume down / up"),
         ]),
         Line::from(vec![
             Span::styled("␣", Style::default().fg(Color::Green)),
@@ -488,11 +488,14 @@ fn render_help_overlay(f: &mut Frame<'_>) {
             Span::raw("       this help"),
         ]),
         Line::from(vec![
-            Span::styled("q", Style::default().fg(Color::Green)),
-            Span::raw("       quit"),
+            Span::styled("q / Esc", Style::default().fg(Color::Green)),
+            Span::raw(" quit"),
         ]),
     ];
-    let para = Paragraph::new(text).block(block).alignment(Alignment::Left);
+    let para = Paragraph::new(text)
+        .block(block)
+        .alignment(Alignment::Left)
+        .scroll((scroll, 0));
     f.render_widget(para, area);
 }
 
@@ -811,6 +814,20 @@ fn main() -> Result<()> {
                             KeyCode::Char('s') | KeyCode::Esc | KeyCode::Char('q') => {
                                 app.overlay = Overlay::None
                             }
+                            _ => {}
+                        },
+                        Overlay::Help { .. } => match key.code {
+                            KeyCode::Char('j') | KeyCode::Down => {
+                                if let Overlay::Help { scroll } = &mut app.overlay {
+                                    *scroll = scroll.saturating_add(1);
+                                }
+                            }
+                            KeyCode::Char('k') | KeyCode::Up => {
+                                if let Overlay::Help { scroll } = &mut app.overlay {
+                                    *scroll = scroll.saturating_sub(1);
+                                }
+                            }
+                            KeyCode::Char('?') | KeyCode::Esc => app.toggle_help(),
                             _ => {}
                         },
                         _ => match key.code {
