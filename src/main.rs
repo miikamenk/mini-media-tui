@@ -261,14 +261,23 @@ impl App {
     }
 }
 
+fn load_thumbnail_from_bytes(picker: &Picker, bytes: &[u8]) -> Option<StatefulProtocol> {
+    let dyn_img = image::load_from_memory(bytes).ok()?;
+    Some(picker.new_resize_protocol(dyn_img))
+}
+
 fn load_thumbnail(picker: &Picker, url: &str) -> Option<StatefulProtocol> {
+    if url.starts_with("file://") {
+        let path = url.trim_start_matches("file://");
+        let bytes = std::fs::read(path).ok()?;
+        return load_thumbnail_from_bytes(picker, &bytes);
+    }
     let response = ureq::get(url).call().ok()?;
     let mut reader = response.into_reader();
     let mut limited = reader.by_ref().take(MAX_IMAGE_BYTES);
     let mut bytes = Vec::new();
     limited.read_to_end(&mut bytes).ok()?;
-    let dyn_img = image::load_from_memory(&bytes).ok()?;
-    Some(picker.new_resize_protocol(dyn_img))
+    load_thumbnail_from_bytes(picker, &bytes)
 }
 
 fn ui(f: &mut Frame<'_>, app: &mut App) {
