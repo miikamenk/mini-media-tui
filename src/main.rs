@@ -38,6 +38,7 @@ struct Media {
     author: String,
     dur: Option<u64>,
     max_dur: Option<u64>,
+    is_playing: bool,
     volume_pct: Option<u8>,
     art_url: Option<String>,
     art_state: Option<StatefulProtocol>,
@@ -54,6 +55,7 @@ impl Media {
             volume_pct: None,
             art_url: None,
             art_state: None,
+            is_playing: false,
         }
     }
 }
@@ -121,6 +123,10 @@ impl MediaSource {
                     media.max_dur = Some(length.as_secs());
                 }
                 new_art_url = metadata.art_url().map(|s| s.to_string());
+            }
+
+            if let Ok(status) = player.get_playback_status() {
+                media.is_playing = status == PlaybackStatus::Playing;
             }
 
             if let Ok(position) = player.get_position() {
@@ -607,7 +613,7 @@ fn render_media_card(
         .wrap(Wrap { trim: true });
     f.render_widget(details, chunks[1]);
 
-    render_controls(f, source, chunks[2], regions);
+    render_controls(f, source, chunks[2], regions, source.media.is_playing);
 }
 
 fn render_artwork(f: &mut Frame<'_>, media: &mut Media, area: Rect) {
@@ -639,7 +645,13 @@ fn render_artwork(f: &mut Frame<'_>, media: &mut Media, area: Rect) {
     }
 }
 
-fn render_controls(f: &mut Frame<'_>, source: &MediaSource, area: Rect, regions: &mut CardRegions) {
+fn render_controls(
+    f: &mut Frame<'_>,
+    source: &MediaSource,
+    area: Rect,
+    regions: &mut CardRegions,
+    is_playing: bool,
+) {
     let chunks =
         Layout::vertical([Constraint::Percentage(70), Constraint::Percentage(30)]).split(area);
     let seek_chunks = Layout::horizontal([Constraint::Percentage(70), Constraint::Percentage(30)])
@@ -695,11 +707,12 @@ fn render_controls(f: &mut Frame<'_>, source: &MediaSource, area: Rect, regions:
             .style(style)
     }
 
-    f.render_widget(make_btn("|<", btn_style), btn_layout[0]);
+    f.render_widget(make_btn("⏮", btn_style), btn_layout[0]);
     regions.prev = btn_layout[0];
-    f.render_widget(make_btn("⏸", sel_style), btn_layout[1]);
+    let play_icon = if is_playing { "⏸" } else { "►" };
+    f.render_widget(make_btn(play_icon, sel_style), btn_layout[1]);
     regions.play_pause = btn_layout[1];
-    f.render_widget(make_btn(">|", btn_style), btn_layout[2]);
+    f.render_widget(make_btn("⏭", btn_style), btn_layout[2]);
     regions.next = btn_layout[2];
 }
 
