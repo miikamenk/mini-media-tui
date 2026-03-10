@@ -10,7 +10,7 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use mpris::PlayerFinder;
+use mpris::{PlayerFinder, PlaybackStatus, Player};
 use ratatui::{
     backend::CrosstermBackend,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
@@ -64,6 +64,26 @@ impl MediaSource {
         }
     }
 
+    fn find_best_player(&self, finder: &PlayerFinder) -> Option<Player> {
+        finder.find_all()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|p| {
+                p.bus_name()
+                    .to_lowercase()
+                    .contains(&self.player_id.to_lowercase())
+            })
+            .max_by_key(|p| {
+                let is_playing = p.get_playback_status()
+                    .map(|s| s == PlaybackStatus::Playing)
+                    .unwrap_or(false);
+                let position = p.get_position()
+                    .map(|d| d.as_millis())
+                    .unwrap_or(0);
+                (is_playing, position)
+            })
+    }
+
     fn refresh(&mut self, finder: &PlayerFinder, picker: &Picker) {
         if self.player_id == "empty" {
             self.media = Media::placeholder("empty");
@@ -74,7 +94,7 @@ impl MediaSource {
         let mut media = Media::placeholder(&self.player_id);
         let mut new_art_url: Option<String> = None;
 
-        if let Ok(player) = finder.find_by_name(&self.player_id) {
+        if let Some(player) = self.find_best_player(finder) {
             if let Ok(metadata) = player.get_metadata() {
                 if let Some(track_id) = metadata.track_id() {
                     media.id = track_id.to_string();
@@ -126,7 +146,7 @@ impl MediaSource {
         if self.player_id == "empty" {
             return;
         }
-        if let Ok(player) = finder.find_by_name(&self.player_id) {
+        if let Some(player) = self.find_best_player(finder) {
             if let Ok(current) = player.get_volume() {
                 let new_volume = (current + delta as f64 / 100.0).clamp(0.0, 1.0);
                 let _ = player.set_volume(new_volume);
@@ -138,7 +158,7 @@ impl MediaSource {
         if self.player_id == "empty" {
             return;
         }
-        if let Ok(player) = finder.find_by_name(&self.player_id) {
+        if let Some(player) = self.find_best_player(finder) {
             player.play_pause();
         }
     }
@@ -147,7 +167,7 @@ impl MediaSource {
         if self.player_id == "empty" {
             return;
         }
-        if let Ok(player) = finder.find_by_name(&self.player_id) {
+        if let Some(player) = self.find_best_player(finder) {
             player.previous();
         }
     }
@@ -156,8 +176,17 @@ impl MediaSource {
         if self.player_id == "empty" {
             return;
         }
-        if let Ok(player) = finder.find_by_name(&self.player_id) {
+        if let Some(player) = self.find_best_player(finder) {
             player.next();
+        }
+    }
+
+    fn seek(&self, finder: &PlayerFinder, delta: i64) {
+        if self.player_id == "empty" {
+            return;
+        }
+        if let Some(player) = self.find_best_player(finder) {
+            player.seek(delta);
         }
     }
 }
@@ -400,6 +429,16 @@ fn main() -> Result<()> {
                     KeyCode::Char('n') => {
                         if let (Some(source), Some(finder)) = (app.selected_source_mut(), finder.as_ref()) {
                             source.next(finder);
+                        }
+                    }
+                    KeyCode::Left => {
+                        if let (Some(source), Some(finder)) = (app.selected_source_mut(), finder.as_ref()) {
+                            source.seek(finder, -5 * 1000000);
+                        }
+                    }
+                    KeyCode::Right => {
+                        if let (Some(source), Some(finder)) = (app.selected_source_mut(), finder.as_ref()) {
+                            source.seek(finder, 5 * 1000000);
                         }
                     }
                     _ => {}
