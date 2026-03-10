@@ -13,6 +13,7 @@ use crossterm::{
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
+use dirs;
 use mpris::{PlaybackStatus, Player, PlayerFinder};
 use ratatui::{
     Frame, Terminal,
@@ -23,6 +24,59 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Gauge, List, ListItem, ListState, Paragraph, Wrap},
 };
 use ratatui_image::{Resize, StatefulImage, picker::Picker, protocol::StatefulProtocol};
+use serde::{Deserialize, Serialize};
+
+#[derive(Serialize, Deserialize, Clone)]
+struct ConfigSource {
+    block_id: String,
+    player_id: String,
+}
+
+#[derive(Serialize, Deserialize)]
+struct Config {
+    sources: Vec<ConfigSource>,
+    refresh_interval_secs: u64,
+}
+
+fn get_config_path() -> Option<std::path::PathBuf> {
+    dirs::config_dir().map(|p| p.join("mini-media").join("config.json"))
+}
+
+fn load_config() -> Config {
+    if let Some(path) = get_config_path() {
+        if path.exists() {
+            if let Ok(content) = std::fs::read_to_string(&path) {
+                if let Ok(config) = serde_json::from_str(&content) {
+                    return config;
+                }
+            }
+        }
+    }
+    Config {
+        sources: vec![
+            ConfigSource {
+                block_id: "media_1".to_string(),
+                player_id: "test".to_string(),
+            },
+            ConfigSource {
+                block_id: "media_2".to_string(),
+                player_id: "firefox".to_string(),
+            },
+        ],
+        refresh_interval_secs: 1,
+    }
+}
+
+fn save_config(config: &Config) -> Result<()> {
+    if let Some(path) = get_config_path() {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let content = serde_json::to_string_pretty(config)?;
+        std::fs::write(path, content)?;
+    }
+    Ok(())
+}
 
 const MAX_IMAGE_BYTES: u64 = 1_500_000;
 
@@ -254,13 +308,17 @@ struct CardRegions {
 impl App {
     fn new() -> Self {
         let picker = Picker::from_query_stdio().unwrap_or_else(|_| Picker::halfblocks());
+        let config = load_config();
+        let sources: Vec<MediaSource> = config
+            .sources
+            .iter()
+            .map(|s| MediaSource::new(&s.block_id, &s.player_id))
+            .collect();
+        let refresh_interval = Duration::from_secs(config.refresh_interval_secs);
         let mut app = Self {
-            sources: vec![
-                MediaSource::new("media_1", "spotify"),
-                MediaSource::new("media_2", "firefox"),
-            ],
+            sources,
             available_sources: vec![],
-            refresh_interval: Duration::from_secs(1),
+            refresh_interval,
             last_refresh: Instant::now(),
             picker,
             selected_media: "".to_string(),
@@ -274,10 +332,15 @@ impl App {
                     progress_bar: Rect::default(),
                     vol_bar: Rect::default(),
                 };
-                2
+                config.sources.len()
             ],
         };
         app.refresh_from_mpris();
+        app.selected_media = app
+            .sources
+            .first()
+            .map(|s| s.player_id.clone())
+            .unwrap_or_default();
         app
     }
 
@@ -813,6 +876,18 @@ fn main() -> Result<()> {
                                     }
                                 }
                                 app.overlay = Overlay::None;
+                                let config = Config {
+                                    sources: app
+                                        .sources
+                                        .iter()
+                                        .map(|s| ConfigSource {
+                                            block_id: s.block_id.clone(),
+                                            player_id: s.player_id.clone(),
+                                        })
+                                        .collect(),
+                                    refresh_interval_secs: app.refresh_interval.as_secs(),
+                                };
+                                let _ = save_config(&config);
                             }
                             KeyCode::Char('s') | KeyCode::Esc | KeyCode::Char('q') => {
                                 app.overlay = Overlay::None
