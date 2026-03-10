@@ -356,6 +356,7 @@ impl App {
     fn handle_click(&mut self, finder: &PlayerFinder, pos: Rect) {
         for (idx, regions) in self.card_regions.iter().enumerate() {
             if pos_in_rect(pos, regions.card_area) {
+                self.selected_media = self.sources[idx].player_id.clone();
                 if pos_in_rect(pos, regions.play_pause) {
                     if let Some(source) = self.sources.get_mut(idx) {
                         source.play_pause(finder);
@@ -386,8 +387,6 @@ impl App {
                             source.set_volume(finder, percent.clamp(0.0, 1.0));
                         }
                     }
-                } else {
-                    self.selected_media = self.sources[idx].player_id.clone();
                 }
                 return;
             }
