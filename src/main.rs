@@ -447,7 +447,7 @@ fn render_help_overlay(f: &mut Frame<'_>, scroll: u16) {
     let area = centered_rect(50, 60, f.area());
     f.render_widget(Clear, area);
     let block = Block::default()
-        .title(" Keybindings (j/k to scroll) ")
+        .title(" Keybindings ")
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Yellow));
     let text = vec![
@@ -457,8 +457,12 @@ fn render_help_overlay(f: &mut Frame<'_>, scroll: u16) {
         ]),
         Line::from(vec![
             Span::styled("j / k", Style::default().fg(Color::Green)),
-            Span::raw("   volume down / up"),
+            Span::raw("  volume down / up"),
         ]),
+        Line::from(vec![Span::styled(
+            "scroll",
+            Style::default().fg(Color::Green),
+        )]),
         Line::from(vec![
             Span::styled("␣", Style::default().fg(Color::Green)),
             Span::raw("       play/pause"),
@@ -827,7 +831,9 @@ fn main() -> Result<()> {
                                     *scroll = scroll.saturating_sub(1);
                                 }
                             }
-                            KeyCode::Char('?') | KeyCode::Esc => app.toggle_help(),
+                            KeyCode::Char('?') | KeyCode::Esc | KeyCode::Char('q') => {
+                                app.toggle_help()
+                            }
                             _ => {}
                         },
                         _ => match key.code {
@@ -889,14 +895,43 @@ fn main() -> Result<()> {
                         },
                     }
                 }
-                Event::Mouse(mouse) => {
-                    if mouse.kind == MouseEventKind::Down(MouseButton::Left) {
+                Event::Mouse(mouse) => match mouse.kind {
+                    MouseEventKind::Down(MouseButton::Left) => {
                         let click_rect = Rect::new(mouse.column, mouse.row, 1, 1);
                         if let Some(finder) = finder.as_ref() {
                             app.handle_click(finder, click_rect);
                         }
                     }
-                }
+                    MouseEventKind::ScrollUp => match &app.overlay {
+                        Overlay::Help { scroll } => {
+                            if let Overlay::Help { scroll } = &mut app.overlay {
+                                *scroll = scroll.saturating_sub(1);
+                            }
+                        }
+                        _ => {
+                            if let (Some(source), Some(finder)) =
+                                (app.selected_source_mut(), finder.as_ref())
+                            {
+                                source.adjust_volume(finder, 1);
+                            }
+                        }
+                    },
+                    MouseEventKind::ScrollDown => match &app.overlay {
+                        Overlay::Help { scroll } => {
+                            if let Overlay::Help { scroll } = &mut app.overlay {
+                                *scroll = scroll.saturating_add(1);
+                            }
+                        }
+                        _ => {
+                            if let (Some(source), Some(finder)) =
+                                (app.selected_source_mut(), finder.as_ref())
+                            {
+                                source.adjust_volume(finder, -1);
+                            }
+                        }
+                    },
+                    _ => {}
+                },
                 _ => {}
             }
         }
