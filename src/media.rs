@@ -157,7 +157,7 @@ impl MediaSource {
             return;
         }
         if let Some(player) = self.find_best_player(finder) {
-            player.play_pause();
+            let _ = player.play_pause();
         }
     }
 
@@ -166,7 +166,7 @@ impl MediaSource {
             return;
         }
         if let Some(player) = self.find_best_player(finder) {
-            player.previous();
+            let _ = player.previous();
         }
     }
 
@@ -175,7 +175,7 @@ impl MediaSource {
             return;
         }
         if let Some(player) = self.find_best_player(finder) {
-            player.next();
+            let _ = player.next();
         }
     }
 
@@ -184,7 +184,7 @@ impl MediaSource {
             return;
         }
         if let Some(player) = self.find_best_player(finder) {
-            player.seek(delta);
+            let _ = player.seek(delta);
         }
     }
 
@@ -198,7 +198,7 @@ impl MediaSource {
                 if let Ok(current_pos) = player.get_position() {
                     let current_secs = current_pos.as_secs() as i64;
                     let delta = (target_secs - current_secs) * 1_000_000;
-                    player.seek(delta);
+                    let _ = player.seek(delta);
                 }
             }
         }

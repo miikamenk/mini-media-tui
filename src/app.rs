@@ -141,12 +141,6 @@ impl App {
         };
     }
 
-    pub fn selected_source(&self) -> Option<&MediaSource> {
-        self.sources
-            .iter()
-            .find(|s| s.player_id == self.selected_media)
-    }
-
     pub fn selected_source_mut(&mut self) -> Option<&mut MediaSource> {
         self.sources
             .iter_mut()

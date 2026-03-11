@@ -1,6 +1,6 @@
 use ratatui::{
-    Frame,
     layout::{Constraint, Direction, Layout, Rect},
+    Frame,
 };
 
 use crate::app::{App, Overlay};

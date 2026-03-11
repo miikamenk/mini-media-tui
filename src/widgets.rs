@@ -289,9 +289,3 @@ pub fn format_duration(value: Option<u64>) -> String {
         })
         .unwrap_or_else(|| "--:--".to_string())
 }
-
-pub fn format_volume(value: Option<u8>) -> String {
-    value
-        .map(|v| format!("{v}%"))
-        .unwrap_or_else(|| "--%".to_string())
-}

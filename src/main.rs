@@ -172,7 +172,7 @@ fn main() -> Result<()> {
                         }
                     }
                     MouseEventKind::ScrollUp => match &app.overlay {
-                        Overlay::Help { scroll } => {
+                        Overlay::Help { scroll: _ } => {
                             if let Overlay::Help { scroll } = &mut app.overlay {
                                 *scroll = scroll.saturating_sub(1);
                             }
@@ -186,7 +186,7 @@ fn main() -> Result<()> {
                         }
                     },
                     MouseEventKind::ScrollDown => match &app.overlay {
-                        Overlay::Help { scroll } => {
+                        Overlay::Help { scroll: _ } => {
                             if let Overlay::Help { scroll } = &mut app.overlay {
                                 *scroll = scroll.saturating_add(1);
                             }
