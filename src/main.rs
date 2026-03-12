@@ -13,13 +13,13 @@ use crossterm::{
         MouseEventKind,
     },
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use mpris::PlayerFinder;
-use ratatui::{backend::CrosstermBackend, Terminal};
+use ratatui::{Terminal, backend::CrosstermBackend};
 
 use app::{App, Overlay};
-use config::{save_config, Config, ConfigSource};
+use config::{Config, ConfigSource, save_config};
 use ui::ui;
 
 fn main() -> Result<()> {
@@ -67,7 +67,11 @@ fn main() -> Result<()> {
                                         let display = player
                                             .trim_start_matches("org.mpris.MediaPlayer2.")
                                             .to_string();
-                                        app.sources[slot].player_id = display;
+                                        app.sources[slot].player_id = display
+                                            .split('.')
+                                            .next()
+                                            .unwrap_or(&display)
+                                            .to_string();
                                     }
                                 }
                                 app.overlay = Overlay::None;
